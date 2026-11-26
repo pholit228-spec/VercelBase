@@ -31,7 +31,10 @@ def migrate_once():
         if not db_path.exists():
             raise RuntimeError("Bundled database.db is missing")
 
-        src = sqlite3.connect(str(db_path))
+        original_connect = getattr(sqlite3, "_original_connect", None)
+        if original_connect is None:
+            original_connect = sqlite3.connect
+        src = original_connect(str(db_path))
         try:
             src.row_factory = sqlite3.Row
             for table in TABLES:
