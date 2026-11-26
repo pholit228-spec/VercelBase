@@ -28,6 +28,37 @@ import sitecustomize  # noqa: F401
 
 from bot import app  # noqa: E402,F401
 
+# Vercel serverless functions can terminate background threads as soon as the
+# webhook response is returned. The bot's normal executor is fine for light
+# updates, but /case must finish while the HTTP invocation is still alive.
+import bot as _bot_module  # noqa: E402
+
+_real_executor = _bot_module.UPDATE_EXECUTOR
+
+class _VercelCaseExecutor:
+    def __init__(self, real_executor):
+        self._real = real_executor
+
+    def submit(self, fn, update):
+        try:
+            msg = getattr(update, "message", None)
+            text_value = str(getattr(msg, "text", "") or "").strip().lower()
+            is_case = (
+                text_value in {"кейс", "case", "/case"}
+                or text_value.startswith("/case@")
+            )
+        except Exception:
+            is_case = False
+
+        if is_case:
+            print("[vercel] /case: synchronous processing", flush=True)
+            fn(update)
+            return None
+
+        return self._real.submit(fn, update)
+
+_bot_module.UPDATE_EXECUTOR = _VercelCaseExecutor(_real_executor)
+
 if (
     os.environ.get("DATABASE_URL")
     or os.environ.get("POSTGRES_URL")
