@@ -1,6 +1,21 @@
 """Vercel entrypoint for the Telegram bot."""
 import os
 
+# Neon integration variables on Vercel use the STORAGE_* prefix.
+# Normalize them before sitecustomize/pg_backend inspect the environment.
+if not os.environ.get("DATABASE_URL"):
+    for _key in (
+        "STORAGE_POSTGRES_URL",
+        "STORAGE_DATABASE_URL",
+        "STORAGE_POSTGRES_URL_NO_SSL",
+        "STORAGE_DATABASE_URL_UNPOOLED",
+        "STORAGE_POSTGRES_URL_NON_POOLING",
+    ):
+        if os.environ.get(_key):
+            os.environ["DATABASE_URL"] = os.environ[_key]
+            break
+
+
 # Vercel: prefer the stable production URL, then the deployment URL.
 # The explicit WEBHOOK_URL env var still has highest priority.
 if not os.environ.get("WEBHOOK_URL"):
