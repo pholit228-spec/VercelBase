@@ -29,17 +29,16 @@ if not os.environ.get("WEBHOOK_URL"):
         # Stable fallback for this Vercel project.
         os.environ["WEBHOOK_URL"] = "https://botik-vercel.vercel.app"
 
-# Vercel's function filesystem is not persistent. Use /tmp unless a database
-# connection is configured or the user explicitly supplied DB_PATH.
-if not (
-    os.environ.get("DATABASE_URL")
-    or os.environ.get("POSTGRES_URL")
-    or os.environ.get("POSTGRES_PRISMA_URL")
-):
-    os.environ.setdefault("DB_PATH", "/tmp/data.db")
+# Persistent PostgreSQL is mandatory. Never silently fall back to local or /tmp SQLite.
+if not os.environ.get("DATABASE_URL"):
+    raise RuntimeError("Persistent database is not configured: Neon DATABASE_URL is missing")
 
-# Patch the existing bot's sqlite3 calls to use PostgreSQL when Neon is connected.
+# Patch SQLite calls before importing the existing bot.
 import sitecustomize  # noqa: F401
+
+# Import the bundled 24-Nov database into PostgreSQL before bot startup.
+from pg_migrate import migrate_once
+migrate_once()
 
 from bot import app  # noqa: E402,F401
 
@@ -74,10 +73,3 @@ class _VercelCaseExecutor:
 
 _bot_module.UPDATE_EXECUTOR = _VercelCaseExecutor(_real_executor)
 
-if (
-    os.environ.get("DATABASE_URL")
-    or os.environ.get("POSTGRES_URL")
-    or os.environ.get("POSTGRES_PRISMA_URL")
-):
-    from pg_migrate import migrate_once
-    migrate_once()
