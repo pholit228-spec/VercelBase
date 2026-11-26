@@ -1060,7 +1060,8 @@ def migrate_from_json() -> None:
         try:
             with open(OLD_COLLECTIONS_FILE, "r", encoding="utf-8") as f:
                 old = json.load(f)
-            n = 0            with db() as conn:
+            n = 0
+            with db() as conn:
                 for uid, items in old.items():
                     for key, count in items.items():
                         conn.execute(
