@@ -56,7 +56,7 @@ class CompatConnection:
 
     def _translate(self, sql):
         original = sql.strip()
-        if re.match(r"^PRAGMA\\s+", original, re.I):
+        if original.upper().startswith("PRAGMA "):
             return None
         s = original.replace("?", "%s")
         s = re.sub(r"ALTER\\s+TABLE\\s+(\\w+)\\s+ADD\\s+COLUMN\\s+",
