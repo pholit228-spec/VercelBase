@@ -36,11 +36,12 @@ if not os.environ.get("DATABASE_URL"):
 # Patch SQLite calls before importing the existing bot.
 import sitecustomize  # noqa: F401
 
-# Import the bundled 24-Nov database into PostgreSQL before bot startup.
+from bot import app  # noqa: E402,F401
+
+# Bot startup creates/migrates the PostgreSQL schema first; then import the
+# bundled 24-Nov snapshot without overwriting rows already present in Neon.
 from pg_migrate import migrate_once
 migrate_once()
-
-from bot import app  # noqa: E402,F401
 
 # Vercel serverless functions can terminate background threads as soon as the
 # webhook response is returned. The bot's normal executor is fine for light
