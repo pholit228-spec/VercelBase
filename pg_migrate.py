@@ -11,13 +11,16 @@ TABLES = [
     "plort_market", "quests"
 ]
 
-\n\ndef migrate_bigint_ids(pg):
+
+def migrate_bigint_ids(pg):
     """Widen Telegram/user/chat identifier columns from 32-bit INTEGER to BIGINT."""
-    if pg.execute("SELECT value FROM bot_migration_meta WHERE key='bigint_ids_v1'").fetchone():
+    if pg.execute(
+        "SELECT value FROM bot_migration_meta WHERE key='bigint_ids_v1'"
+    ).fetchone():
         return
 
     # Foreign keys prevent changing the type of either side independently.
-    # Save their definitions, temporarily remove them, widen ID columns, then restore them.
+    # Save definitions, remove them, widen ID columns, then restore them.
     fks = pg.execute("""
         SELECT c.conrelid::regclass::text AS table_name,
                c.conname,
@@ -29,7 +32,10 @@ TABLES = [
     """).fetchall()
 
     for fk in fks:
-        pg.execute(f'ALTER TABLE "{fk["table_name"]}" DROP CONSTRAINT "{fk["conname"]}"')
+        pg.execute(
+            f'ALTER TABLE "{fk["table_name"]}" '
+            f'DROP CONSTRAINT "{fk["conname"]}"'
+        )
 
     cols = pg.execute("""
         SELECT table_name, column_name
@@ -53,12 +59,19 @@ TABLES = [
         )
 
     pg.execute(
-        "INSERT INTO bot_migration_meta(key,value) VALUES('bigint_ids_v1','done') "
+        "INSERT INTO bot_migration_meta(key,value) "
+        "VALUES('bigint_ids_v1','done') "
         "ON CONFLICT (key) DO NOTHING"
     )
     pg.commit()
-\ndef migrate_once():
-    if not (os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.environ.get("POSTGRES_PRISMA_URL")):
+
+
+def migrate_once():
+    if not (
+        os.environ.get("DATABASE_URL")
+        or os.environ.get("POSTGRES_URL")
+        or os.environ.get("POSTGRES_PRISMA_URL")
+    ):
         return
 
     pg = connect()
@@ -67,10 +80,14 @@ TABLES = [
             "CREATE TABLE IF NOT EXISTS bot_migration_meta "
             "(key TEXT PRIMARY KEY, value TEXT NOT NULL)"
         )
+
         if pg.execute(
             "SELECT value FROM bot_migration_meta WHERE key='sqlite_bundle_v1'"
         ).fetchone():
             pg.commit()
+            # The SQLite bundle was already imported on an earlier deploy,
+            # but schema migrations still need to run.
+            migrate_bigint_ids(pg)
             return
 
         db_path = Path(__file__).with_name("database.db")
@@ -80,9 +97,11 @@ TABLES = [
         original_connect = getattr(sqlite3, "_original_connect", None)
         if original_connect is None:
             original_connect = sqlite3.connect
+
         src = original_connect(str(db_path))
         try:
             src.row_factory = sqlite3.Row
+
             for table in TABLES:
                 if not src.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -90,14 +109,20 @@ TABLES = [
                 ).fetchone():
                     continue
 
-                cols = [r[1] for r in src.execute(
-                    f'PRAGMA table_info("{table}")'
-                ).fetchall()]
+                cols = [
+                    r[1] for r in src.execute(
+                        f'PRAGMA table_info("{table}")'
+                    ).fetchall()
+                ]
                 if not cols:
                     continue
 
-                quoted = ", ".join('"' + c.replace('"', '""') + '"' for c in cols)
-                rows = src.execute(f'SELECT {quoted} FROM "{table}"').fetchall()
+                quoted = ", ".join(
+                    '"' + c.replace('"', '""') + '"' for c in cols
+                )
+                rows = src.execute(
+                    f'SELECT {quoted} FROM "{table}"'
+                ).fetchall()
                 if not rows:
                     continue
 
@@ -106,6 +131,7 @@ TABLES = [
                     f'INSERT INTO "{table}" ({quoted}) VALUES ({placeholders}) '
                     "ON CONFLICT DO NOTHING"
                 )
+
                 cur = pg._conn.cursor()
                 cur.executemany(sql, [tuple(r) for r in rows])
                 cur.close()
@@ -116,6 +142,8 @@ TABLES = [
                 "ON CONFLICT (key) DO NOTHING"
             )
             pg.commit()
+
+            # Run schema migrations after the initial data import.
             migrate_bigint_ids(pg)
         finally:
             src.close()
