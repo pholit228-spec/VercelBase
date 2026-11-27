@@ -111,6 +111,11 @@ def _get_legacy_bot():
     if _legacy_bot is None:
         print("[startup] loading bot.py with aiogram transport", flush=True)
         _legacy_bot = _load_legacy_bot()
+        # bot.py's favorite-food check uses SLIME_ENGLISH_NAMES. Keep the
+        # custom Shimmer Slime mapping in sync with the food catalog, where
+        # 🎼Перезвон is already marked as favorite_of=Shimmer Slime.
+        if isinstance(getattr(_legacy_bot, "SLIME_ENGLISH_NAMES", None), dict):
+            _legacy_bot.SLIME_ENGLISH_NAMES["shimmer_slime"] = "Shimmer Slime"
 
     if not _db_checked:
         import pg_migrate
