@@ -2,7 +2,14 @@
   "version": 2,
   "functions": {
     "api/index.py": {
-      "maxDuration": 60
+      "maxDuration": 60,
+      "includeFiles": [
+        "database.db",
+        "bot.py",
+        "pg_migrate.py",
+        "pg_backend.py",
+        "sitecustomize.py"
+      ]
     }
   },
   "routes": [
