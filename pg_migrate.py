@@ -121,6 +121,57 @@ def migrate_bigint_ids_v2(pg):
     pg.commit()
 
 
+def migrate_all_integer_columns_to_bigint(pg):
+    """Last-resort schema repair: widen every remaining PostgreSQL int4 column."""
+    if pg.execute(
+        "SELECT value FROM bot_migration_meta WHERE key='bigint_ids_v3'"
+    ).fetchone():
+        return
+
+    fks = pg.execute("""
+        SELECT c.conrelid::regclass::text AS table_name,
+               c.conname,
+               pg_get_constraintdef(c.oid) AS definition
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE c.contype = 'f' AND n.nspname = 'public'
+    """).fetchall()
+
+    for fk in fks:
+        pg.execute(
+            f'ALTER TABLE "{fk["table_name"]}" '
+            f'DROP CONSTRAINT "{fk["conname"]}"'
+        )
+
+    cols = pg.execute("""
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema='public'
+          AND data_type='integer'
+    """).fetchall()
+
+    for col in cols:
+        pg.execute(
+            f'ALTER TABLE "{col["table_name"]}" '
+            f'ALTER COLUMN "{col["column_name"]}" TYPE BIGINT '
+            f'USING "{col["column_name"]}"::bigint'
+        )
+
+    for fk in fks:
+        pg.execute(
+            f'ALTER TABLE "{fk["table_name"]}" '
+            f'ADD CONSTRAINT "{fk["conname"]}" {fk["definition"]}'
+        )
+
+    pg.execute(
+        "INSERT INTO bot_migration_meta(key,value) "
+        "VALUES('bigint_ids_v3','done') "
+        "ON CONFLICT (key) DO NOTHING"
+    )
+    pg.commit()
+
+
 def migrate_once():
     if not (
         os.environ.get("DATABASE_URL")
@@ -142,6 +193,7 @@ def migrate_once():
             pg.commit()
             migrate_bigint_ids(pg)
             migrate_bigint_ids_v2(pg)
+            migrate_all_integer_columns_to_bigint(pg)
             return
 
         db_path = Path(__file__).with_name("database.db")
@@ -165,6 +217,7 @@ def migrate_once():
                 pg.commit()
                 migrate_bigint_ids(pg)
                 migrate_bigint_ids_v2(pg)
+                migrate_all_integer_columns_to_bigint(pg)
                 return
 
             raise RuntimeError("Bundled database.db is missing")
@@ -222,6 +275,7 @@ def migrate_once():
             pg.commit()
             migrate_bigint_ids(pg)
             migrate_bigint_ids_v2(pg)
+            migrate_all_integer_columns_to_bigint(pg)
         finally:
             src.close()
     except Exception:
