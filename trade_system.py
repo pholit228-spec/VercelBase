@@ -76,7 +76,10 @@ def art(legacy,key):
     except Exception:return None
 
 def font(n,b=False):
-    p="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if b else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    # Prefer the bundled Comfortaa Bold for all trade artwork.
+    local=os.path.join(os.path.dirname(__file__),"fonts","Comfortaa-Bold.ttf")
+    fallback="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if b else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    p=local if b and os.path.exists(local) else fallback
     return ImageFont.truetype(p,n) if os.path.exists(p) else ImageFont.load_default()
 
 def fit(data,size):
