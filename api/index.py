@@ -154,6 +154,60 @@ async def _all_chat_members(update):
     await legacy.bot.dispatch_chat_member(update)
 
 
+def _claim_update(update_id: int) -> bool:
+    """Atomically claim a Telegram update across all Vercel instances."""
+    from pg_backend import connect
+
+    conn = connect()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_processed_updates (
+                update_id BIGINT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'processing',
+                received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                finished_at TIMESTAMPTZ
+            )
+        """)
+        cur = conn.execute(
+            """
+            INSERT INTO telegram_processed_updates (update_id, status)
+            VALUES (?, 'processing')
+            ON CONFLICT (update_id) DO NOTHING
+            """,
+            (update_id,),
+        )
+        claimed = cur.rowcount == 1
+        conn.commit()
+        return claimed
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _finish_update(update_id: int, status: str) -> None:
+    """Record the final outcome; the initial claim remains even on failure."""
+    from pg_backend import connect
+
+    conn = connect()
+    try:
+        conn.execute(
+            """
+            UPDATE telegram_processed_updates
+            SET status=?, finished_at=NOW()
+            WHERE update_id=?
+            """,
+            (status, update_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _check_secret():
     if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
         abort(403)
@@ -173,15 +227,51 @@ async def webhook():
         if not isinstance(raw, dict):
             return "Invalid update", 400
 
-        update_id = raw.get("update_id", "unknown")
-        print(f"[webhook] aiogram received update_id={update_id}", flush=True)
+        try:
+            update_id = int(raw["update_id"])
+        except (KeyError, TypeError, ValueError):
+            return "Invalid update_id", 400
 
-        await _dispatch_update(raw)
+        print(f"[webhook] received update_id={update_id}", flush=True)
 
-        print(f"[webhook] aiogram completed update_id={update_id}", flush=True)
+        # The unique PostgreSQL key makes this safe across concurrent
+        # serverless instances and survives cold starts/redeployments.
+        if not _claim_update(update_id):
+            print(f"[webhook] duplicate ignored update_id={update_id}", flush=True)
+            return "Duplicate ignored", 200
+
+        try:
+            await _dispatch_update(raw)
+        except Exception:
+            print(
+                f"[webhook] handler failed; update will not be replayed update_id={update_id}",
+                file=sys.stderr,
+                flush=True,
+            )
+            traceback.print_exc(file=sys.stderr)
+            try:
+                _finish_update(update_id, "failed")
+            except Exception:
+                traceback.print_exc(file=sys.stderr)
+            # The update may already have sent messages before the exception.
+            # A 200 prevents Telegram from replaying and duplicating those sends.
+            return "Processed with handler error; replay suppressed", 200
+
+        try:
+            _finish_update(update_id, "completed")
+        except Exception:
+            # The committed claim still blocks duplicate deliveries.
+            print(
+                f"[webhook] could not mark completed update_id={update_id}",
+                file=sys.stderr,
+                flush=True,
+            )
+            traceback.print_exc(file=sys.stderr)
+
+        print(f"[webhook] completed update_id={update_id}", flush=True)
         return "", 200
 
     except Exception:
-        print("[webhook] ERROR", file=sys.stderr, flush=True)
+        print("[webhook] ERROR before update claim", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return "Webhook processing failed", 500
