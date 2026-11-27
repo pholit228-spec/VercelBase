@@ -1,6 +1,7 @@
 """Telegram webhook entrypoint for Vercel."""
 
 import asyncio
+import ast
 import hashlib
 import json
 import os
@@ -52,14 +53,32 @@ def _load_legacy_bot():
     path = Path(__file__).resolve().parent.parent / "bot.py"
     source = path.read_text(encoding="utf-8")
 
-    cleaned, removed = re.subn(
-        r"\n[ \t]*startup\(\)[ \t]*(?=\n?\Z)",
-        "\n",
-        source,
-        count=1,
-    )
+    tree = ast.parse(source, filename=str(path))
+
+    # Remove only a top-level startup() call. The startup function itself
+    # stays intact, and this works even if bot.py has trailing comments/newlines.
+    removed = 0
+    kept = []
+    for node in tree.body:
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "startup"
+            and not node.value.args
+            and not node.value.keywords
+        ):
+            removed += 1
+            continue
+        kept.append(node)
+
     if removed != 1:
-        raise RuntimeError("Could not disable legacy startup() in bot.py")
+        raise RuntimeError(
+            f"Could not disable legacy startup() in bot.py (found {removed})"
+        )
+
+    tree.body = kept
+    ast.fix_missing_locations(tree)
 
     spec = importlib.util.spec_from_file_location("bot", path)
     if spec is None or spec.loader is None:
@@ -70,7 +89,7 @@ def _load_legacy_bot():
     module.__file__ = str(path)
     sys.modules["bot"] = module
 
-    code = compile(cleaned, str(path), "exec")
+    code = compile(tree, str(path), "exec")
     exec(code, module.__dict__)
     return module
 
