@@ -1,4 +1,4 @@
-import io, os, re, time, uuid, asyncio
+import io, os, re, time, uuid, asyncio, base64, gzip
 from PIL import Image, ImageDraw, ImageFont
 from aiogram.types import BufferedInputFile
 from pg_backend import connect
@@ -75,11 +75,32 @@ def art(legacy,key):
         b=src.read(); src.close(); return b
     except Exception:return None
 
+_COMFORTAA_CACHE=None
+
+def _comfortaa():
+    global _COMFORTAA_CACHE
+    if _COMFORTAA_CACHE and os.path.exists(_COMFORTAA_CACHE):
+        return _COMFORTAA_CACHE
+    root=os.path.join(os.path.dirname(__file__),"fonts")
+    raw=[]
+    for i in range(15):
+        p=os.path.join(root,f"comfortaa_bold.part{i:02d}")
+        if not os.path.exists(p):
+            return None
+        with open(p,"r",encoding="ascii") as f: raw.append(f.read().strip())
+    out="/tmp/Comfortaa-Bold.ttf"
+    try:
+        with open(out,"wb") as f: f.write(gzip.decompress(base64.b64decode("".join(raw))))
+        _COMFORTAA_CACHE=out
+        return out
+    except Exception:
+        return None
+
 def font(n,b=False):
-    # Prefer the bundled Comfortaa Bold for all trade artwork.
-    local=os.path.join(os.path.dirname(__file__),"fonts","Comfortaa-Bold.ttf")
+    # Use bundled Comfortaa Bold for the Pillow trade cards.
+    local=_comfortaa() if b else None
     fallback="/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if b else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    p=local if b and os.path.exists(local) else fallback
+    p=local or fallback
     return ImageFont.truetype(p,n) if os.path.exists(p) else ImageFont.load_default()
 
 def fit(data,size):
