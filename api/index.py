@@ -136,8 +136,104 @@ async def _dispatch_update(raw: dict):
         await bot.session.close()
 
 
+def _group_greeting(chat_id: int):
+    """Return the saved greeting for a group, or None when it is not configured."""
+    from pg_backend import connect
+
+    conn = connect()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS group_greetings (
+                chat_id BIGINT PRIMARY KEY,
+                greeting TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur = conn.execute(
+            "SELECT greeting FROM group_greetings WHERE chat_id=?",
+            (chat_id,),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row[0] if row else None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _set_group_greeting(chat_id: int, greeting: str):
+    """Persist one greeting per group in Neon PostgreSQL."""
+    from pg_backend import connect
+
+    conn = connect()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS group_greetings (
+                chat_id BIGINT PRIMARY KEY,
+                greeting TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        conn.execute(
+            """
+            INSERT INTO group_greetings (chat_id, greeting)
+            VALUES (?, ?)
+            ON CONFLICT (chat_id)
+            DO UPDATE SET greeting=EXCLUDED.greeting, updated_at=NOW()
+            """,
+            (chat_id, greeting),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def _handle_group_features(message):
+    """Handle persistent group greetings before legacy message dispatch."""
+    chat = message.chat
+    if chat.type not in {"group", "supergroup"}:
+        return False
+
+    text_value = (message.text or "").strip()
+
+    # Only the configured Telegram user ID may change the greeting.
+    if text_value.startswith("/setgreet"):
+        admin_id = os.environ.get("ADMIN_ID", "").strip()
+        if admin_id and str(message.from_user.id) == admin_id:
+            greeting = text_value[len("/setgreet"):].strip()
+            if not greeting:
+                await message.answer("Использование: /setgreet Текст приветствия")
+                return True
+
+            _set_group_greeting(chat.id, greeting)
+            await message.answer(f"Приветствие сохранено: {greeting}")
+            return True
+
+        await message.answer("Эту команду может использовать только администратор.")
+        return True
+
+    if message.new_chat_members:
+        greeting = _group_greeting(chat.id)
+        if greeting:
+            for member in message.new_chat_members:
+                # Do not greet bots joining the group.
+                if member.is_bot:
+                    continue
+                await message.answer(f"{member.full_name}, {greeting}")
+
+    return False
+
+
 @_router.message()
 async def _all_messages(message):
+    if await _handle_group_features(message):
+        return
+
     legacy = _get_legacy_bot()
     await legacy.bot.dispatch_message(message)
 
