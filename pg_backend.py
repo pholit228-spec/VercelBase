@@ -69,7 +69,7 @@ class CompatConnection:
             return None
         # SQLite uses BEGIN IMMEDIATE to reserve a write lock. PostgreSQL starts
         # the transaction automatically on the first statement (psycopg default).
-        if re.match(r"^BEGIN\\s+IMMEDIATE\\b", original, re.I):
+        if original.upper().startswith("BEGIN IMMEDIATE"):
             return None
         s = original.replace("?", "%s")
         s = re.sub(r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN\s+",
