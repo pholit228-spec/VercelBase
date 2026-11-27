@@ -19,8 +19,6 @@ def migrate_bigint_ids(pg):
     ).fetchone():
         return
 
-    # Foreign keys prevent changing the type of either side independently.
-    # Save definitions, remove them, widen ID columns, then restore them.
     fks = pg.execute("""
         SELECT c.conrelid::regclass::text AS table_name,
                c.conname,
@@ -85,8 +83,6 @@ def migrate_once():
             "SELECT value FROM bot_migration_meta WHERE key='sqlite_bundle_v1'"
         ).fetchone():
             pg.commit()
-            # The SQLite bundle was already imported on an earlier deploy,
-            # but schema migrations still need to run.
             migrate_bigint_ids(pg)
             return
 
@@ -94,11 +90,18 @@ def migrate_once():
         if not db_path.exists():
             raise RuntimeError("Bundled database.db is missing")
 
+        # Vercel's deployment filesystem is read-only. Open the bundled
+        # SQLite file explicitly as read-only so SQLite never tries to create
+        # a journal/WAL beside it. This is only the migration source; Neon
+        # remains the live database.
         original_connect = getattr(sqlite3, "_original_connect", None)
         if original_connect is None:
             original_connect = sqlite3.connect
 
-        src = original_connect(str(db_path))
+        src = original_connect(
+            f"file:{db_path}?mode=ro&immutable=1",
+            uri=True,
+        )
         try:
             src.row_factory = sqlite3.Row
 
@@ -143,7 +146,6 @@ def migrate_once():
             )
             pg.commit()
 
-            # Run schema migrations after the initial data import.
             migrate_bigint_ids(pg)
         finally:
             src.close()
