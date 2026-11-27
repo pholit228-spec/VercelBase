@@ -122,7 +122,7 @@ def health():
 
 
 @app.route(WEBHOOK_PATH, methods=["POST"])
-def telegram_webhook():
+async def telegram_webhook():
     _verify_secret()
 
     try:
@@ -133,7 +133,9 @@ def telegram_webhook():
         # Crucial difference from the old implementation:
         # there is NO detached executor and NO fire-and-forget processing.
         # The HTTP request waits for aiogram -> handler processing to finish.
-        asyncio.run(_dispatch(raw))
+        # Flask is running this view as an async request. Await aiogram
+        # directly instead of creating a new event loop for every update.
+        await _dispatch(raw)
 
         print(f"[webhook] completed update_id={update_id}", flush=True)
         return "", 200
