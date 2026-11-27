@@ -11,7 +11,53 @@ TABLES = [
     "plort_market", "quests"
 ]
 
-def migrate_once():
+\n\ndef migrate_bigint_ids(pg):
+    """Widen Telegram/user/chat identifier columns from 32-bit INTEGER to BIGINT."""
+    if pg.execute("SELECT value FROM bot_migration_meta WHERE key='bigint_ids_v1'").fetchone():
+        return
+
+    # Foreign keys prevent changing the type of either side independently.
+    # Save their definitions, temporarily remove them, widen ID columns, then restore them.
+    fks = pg.execute("""
+        SELECT c.conrelid::regclass::text AS table_name,
+               c.conname,
+               pg_get_constraintdef(c.oid) AS definition
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE c.contype = 'f' AND n.nspname = 'public'
+    """).fetchall()
+
+    for fk in fks:
+        pg.execute(f'ALTER TABLE "{fk["table_name"]}" DROP CONSTRAINT "{fk["conname"]}"')
+
+    cols = pg.execute("""
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema='public'
+          AND data_type='integer'
+          AND (column_name = 'id' OR column_name LIKE '%_id')
+    """).fetchall()
+
+    for col in cols:
+        pg.execute(
+            f'ALTER TABLE "{col["table_name"]}" '
+            f'ALTER COLUMN "{col["column_name"]}" TYPE BIGINT '
+            f'USING "{col["column_name"]}"::bigint'
+        )
+
+    for fk in fks:
+        pg.execute(
+            f'ALTER TABLE "{fk["table_name"]}" '
+            f'ADD CONSTRAINT "{fk["conname"]}" {fk["definition"]}'
+        )
+
+    pg.execute(
+        "INSERT INTO bot_migration_meta(key,value) VALUES('bigint_ids_v1','done') "
+        "ON CONFLICT (key) DO NOTHING"
+    )
+    pg.commit()
+\ndef migrate_once():
     if not (os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.environ.get("POSTGRES_PRISMA_URL")):
         return
 
@@ -70,6 +116,7 @@ def migrate_once():
                 "ON CONFLICT (key) DO NOTHING"
             )
             pg.commit()
+            migrate_bigint_ids(pg)
         finally:
             src.close()
     except Exception:
