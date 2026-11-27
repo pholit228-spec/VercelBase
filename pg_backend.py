@@ -10,7 +10,7 @@ class CompatRow:
     __slots__ = ("_values", "_mapping")
     def __init__(self, values, description):
         self._values = tuple(values)
-        self._mapping = {d[0]: self._values[i] for i, d in enumerate(description)}
+        self._mapping = {(d.name if hasattr(d, 'name') else d[0]): self._values[i] for i, d in enumerate(description)}
     def __getitem__(self, key):
         return self._values[key] if isinstance(key, int) else self._mapping[key]
     def __iter__(self):
