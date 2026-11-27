@@ -1,5 +1,4 @@
 Flask[async]
-pyTelegramBotAPI
 aiogram>=3.34,<4
 Pillow
 psycopg[binary]
