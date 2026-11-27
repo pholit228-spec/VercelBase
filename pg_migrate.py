@@ -362,7 +362,7 @@ def migrate_once():
                 migrate_bigint_ids_v2(pg)
                 migrate_all_integer_columns_to_bigint(pg)
                 migrate_telegram_id_columns_v4(pg)
-            migrate_all_int4_columns_always(pg)
+                migrate_all_int4_columns_always(pg)
                 return
 
             raise RuntimeError("Bundled database.db is missing")
