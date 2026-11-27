@@ -38,10 +38,9 @@ import sitecustomize  # noqa: F401
 
 from bot import app  # noqa: E402,F401
 
-# Bot startup creates/migrates the PostgreSQL schema first; then import the
-# bundled 24-Nov snapshot without overwriting rows already present in Neon.
-from pg_migrate import migrate_once
-migrate_once()
+# The live bot uses Neon only. The bundled 24-Nov SQLite snapshot is NOT read
+# during Vercel startup: the deployment filesystem is read-only, and importing
+# a recovery snapshot on every cold start would be unsafe for current data.
 
 # Vercel serverless functions can terminate background threads as soon as the
 # webhook response is returned. The bot's normal executor is fine for light
