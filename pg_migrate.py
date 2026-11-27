@@ -269,6 +269,50 @@ def migrate_telegram_id_columns_v4(pg):
     pg.commit()
 
 
+def migrate_all_int4_columns_always(pg):
+    """Ensure the live Neon schema has no PostgreSQL int4 columns."""
+    fks = pg.execute("""
+        SELECT c.conrelid::regclass::text AS table_name,
+               c.conname,
+               pg_get_constraintdef(c.oid) AS definition
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE c.contype = 'f' AND n.nspname = 'public'
+    """).fetchall()
+
+    cols = pg.execute("""
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema='public'
+          AND udt_name='int4'
+    """).fetchall()
+
+    if not cols:
+        return
+
+    for fk in fks:
+        pg.execute(
+            f'ALTER TABLE "{fk["table_name"]}" '
+            f'DROP CONSTRAINT "{fk["conname"]}"'
+        )
+
+    for col in cols:
+        pg.execute(
+            f'ALTER TABLE "{col["table_name"]}" '
+            f'ALTER COLUMN "{col["column_name"]}" TYPE BIGINT '
+            f'USING "{col["column_name"]}"::bigint'
+        )
+
+    for fk in fks:
+        pg.execute(
+            f'ALTER TABLE "{fk["table_name"]}" '
+            f'ADD CONSTRAINT "{fk["conname"]}" {fk["definition"]}'
+        )
+
+    pg.commit()
+
+
 def migrate_once():
     if not (
         os.environ.get("DATABASE_URL")
@@ -292,6 +336,7 @@ def migrate_once():
             migrate_bigint_ids_v2(pg)
             migrate_all_integer_columns_to_bigint(pg)
             migrate_telegram_id_columns_v4(pg)
+            migrate_all_int4_columns_always(pg)
             return
 
         db_path = Path(__file__).with_name("database.db")
@@ -317,6 +362,7 @@ def migrate_once():
                 migrate_bigint_ids_v2(pg)
                 migrate_all_integer_columns_to_bigint(pg)
                 migrate_telegram_id_columns_v4(pg)
+            migrate_all_int4_columns_always(pg)
                 return
 
             raise RuntimeError("Bundled database.db is missing")
@@ -376,6 +422,7 @@ def migrate_once():
             migrate_bigint_ids_v2(pg)
             migrate_all_integer_columns_to_bigint(pg)
             migrate_telegram_id_columns_v4(pg)
+            migrate_all_int4_columns_always(pg)
         finally:
             src.close()
     except Exception:
