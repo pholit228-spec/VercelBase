@@ -49,20 +49,18 @@ WEBHOOK_SECRET = (
 if not os.environ.get("DATABASE_URL"):
     raise RuntimeError("DATABASE_URL is missing: connect the Vercel project to Neon")
 
-# Install the SQLite->PostgreSQL compatibility layer before loading the old
-# bot. This keeps the existing synchronous game code pointed at Neon.
 import sitecustomize  # noqa: F401,E402
+
+app = Flask(__name__)
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
+
+LEGACY_TIMEOUT = 55
+_legacy_bot = None
 
 
 def _load_legacy_bot():
-    """
-    Load bot.py without executing its old PythonAnywhere startup() call.
-
-    bot.py is a 3.6 MB legacy application, so rewriting the whole file just to
-    remove one import-time side effect would be risky. We load the exact file
-    shipped with this deployment and remove only a standalone final startup()
-    statement. The rest of the game logic stays untouched.
-    """
+    """Load bot.py without running its old PythonAnywhere startup()."""
     path = Path(__file__).resolve().parent.parent / "bot.py"
     source = path.read_text(encoding="utf-8")
 
@@ -89,28 +87,29 @@ def _load_legacy_bot():
     return module
 
 
-# Import first so the existing bot can create/upgrade its PostgreSQL-compatible
-# schema. Then copy the old SQLite data into that persistent database exactly
-# once. The migration has its own completion marker in PostgreSQL.
-import pg_migrate  # noqa: E402
-legacy_bot = _load_legacy_bot()
-pg_migrate.migrate_once()
+def _get_legacy_bot():
+    global _legacy_bot
+    if _legacy_bot is None:
+        print("[startup] loading legacy bot.py", flush=True)
+        _legacy_bot = _load_legacy_bot()
 
-app = Flask(__name__)
-bot = Bot(BOT_TOKEN)
-dp = Dispatcher()
+        import pg_migrate
+        pg_migrate.migrate_once()
 
-LEGACY_TIMEOUT = 55
+        print("[startup] legacy bot loaded; Neon migration checked", flush=True)
+    return _legacy_bot
 
 
 def _legacy_update(raw: dict):
-    return legacy_bot.telebot.types.Update.de_json(json.dumps(raw))
+    legacy = _get_legacy_bot()
+    return legacy.telebot.types.Update.de_json(json.dumps(raw))
 
 
 async def _process_legacy(raw: dict) -> None:
+    legacy = _get_legacy_bot()
     update = _legacy_update(raw)
     await asyncio.wait_for(
-        asyncio.to_thread(legacy_bot.bot.process_new_updates, [update]),
+        asyncio.to_thread(legacy.bot.process_new_updates, [update]),
         timeout=LEGACY_TIMEOUT,
     )
 
