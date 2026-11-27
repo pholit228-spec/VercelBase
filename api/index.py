@@ -1,12 +1,4 @@
-"""Async Telegram webhook entrypoint for Vercel + aiogram 3.
-
-The legacy game logic remains in bot.py. aiogram owns the HTTP webhook and
-update lifecycle, while synchronous TeleBot handlers run in a worker thread.
-
-IMPORTANT: runtime state is stored in Neon PostgreSQL. Vercel's filesystem is
-never used as the live database. database.db is only a one-time migration
-source and is never written to.
-"""
+"""Async Telegram webhook entrypoint for Vercel + aiogram 3."""
 
 import asyncio
 import hashlib
@@ -59,11 +51,30 @@ LEGACY_TIMEOUT = 55
 _legacy_bot = None
 
 
+async def _configure_webhook():
+    base = os.environ.get("VERCEL_PROJECT_PRODUCTION_URL") or os.environ.get("VERCEL_URL")
+    if not base:
+        print("[webhook] Vercel URL unavailable; keeping existing webhook", flush=True)
+        return
+    if not base.startswith("http"):
+        base = "https://" + base
+    url = base.rstrip("/") + "/webhook"
+    try:
+        await bot.set_webhook(
+            url=url,
+            secret_token=WEBHOOK_SECRET,
+            drop_pending_updates=False,
+            allowed_updates=dp.resolve_used_update_types(),
+        )
+        print(f"[webhook] configured Telegram -> {url}", flush=True)
+    except Exception:
+        print("[webhook] failed to configure Telegram webhook", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+
+
 def _load_legacy_bot():
-    """Load bot.py without running its old PythonAnywhere startup()."""
     path = Path(__file__).resolve().parent.parent / "bot.py"
     source = path.read_text(encoding="utf-8")
-
     cleaned, removed = re.subn(
         r"\n[ \t]*startup\(\)[ \t]*(?=\n?\Z)",
         "\n",
@@ -72,16 +83,13 @@ def _load_legacy_bot():
     )
     if removed != 1:
         raise RuntimeError("Could not disable legacy startup() in bot.py")
-
     spec = importlib.util.spec_from_file_location("bot", path)
     if spec is None or spec.loader is None:
         raise RuntimeError("Could not create loader for bot.py")
-
     module = importlib.util.module_from_spec(spec)
     module.__name__ = "bot"
     module.__file__ = str(path)
     sys.modules["bot"] = module
-
     code = compile(cleaned, str(path), "exec")
     exec(code, module.__dict__)
     return module
@@ -92,10 +100,8 @@ def _get_legacy_bot():
     if _legacy_bot is None:
         print("[startup] loading legacy bot.py", flush=True)
         _legacy_bot = _load_legacy_bot()
-
         import pg_migrate
         pg_migrate.migrate_once()
-
         print("[startup] legacy bot loaded; Neon migration checked", flush=True)
     return _legacy_bot
 
@@ -145,12 +151,9 @@ async def webhook():
         raw = request.get_json(force=True, silent=False)
         if not isinstance(raw, dict):
             return "Invalid update", 400
-
         update_id = raw.get("update_id", "unknown")
         print(f"[webhook] received update_id={update_id}", flush=True)
-
         await dispatch(raw)
-
         print(f"[webhook] completed update_id={update_id}", flush=True)
         return "", 200
     except asyncio.TimeoutError:
@@ -160,3 +163,12 @@ async def webhook():
         print("[webhook] ERROR", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return "Webhook processing failed", 500
+
+
+# Vercel can initialize a function without a request, so configure Telegram
+# explicitly when this module is loaded. The production URL is injected by Vercel.
+try:
+    asyncio.run(_configure_webhook())
+except Exception:
+    print("[webhook] startup webhook setup failed", file=sys.stderr, flush=True)
+    traceback.print_exc(file=sys.stderr)
