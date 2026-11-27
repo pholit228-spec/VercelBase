@@ -221,9 +221,7 @@ async def _handle_group_features(message):
         greeting = _group_greeting(chat.id)
         if greeting:
             for member in message.new_chat_members:
-                # Do not greet bots joining the group.
-                if member.is_bot:
-                    continue
+                # Greet both human users and bots that join the group.
                 await message.answer(f"{member.full_name}, {greeting}")
 
     return False
