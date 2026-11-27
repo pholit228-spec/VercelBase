@@ -1,17 +1,17 @@
-"""Telegram webhook entrypoint for Vercel."""
+"""Vercel webhook entrypoint: aiogram 3.x + existing synchronous handlers."""
 
 import asyncio
 import ast
 import hashlib
-import json
 import os
-import re
 import sys
 import traceback
 import importlib.util
 from pathlib import Path
 
 from flask import Flask, abort, request
+from aiogram import Bot, Dispatcher, Router
+from aiogram.types import Update
 
 if not os.environ.get("DATABASE_URL"):
     for key in (
@@ -19,7 +19,7 @@ if not os.environ.get("DATABASE_URL"):
         "STORAGE_DATABASE_URL",
         "STORAGE_POSTGRES_URL_NO_SSL",
         "STORAGE_DATABASE_URL_UNPOOLED",
-        "STORAGE_POSTGRES_URL_NON_POOLING",
+        "STORAGE_DATABASE_URL_NON_POOLING",
         "POSTGRES_URL",
         "POSTGRES_PRISMA_URL",
     ):
@@ -44,21 +44,33 @@ import sitecustomize  # noqa: F401,E402
 
 app = Flask(__name__)
 
-LEGACY_TIMEOUT = 55
 _legacy_bot = None
+_db_checked = False
+_aiogram_dispatcher = Dispatcher()
+_router = Router()
+_aiogram_dispatcher.include_router(_router)
 
 
 def _load_legacy_bot():
-    """Load bot.py without running its old PythonAnywhere startup()."""
+    """Load bot.py while replacing its old TeleBot import with our aiogram facade."""
+    global _legacy_bot
+
     path = Path(__file__).resolve().parent.parent / "bot.py"
     source = path.read_text(encoding="utf-8")
 
+    # bot.py is large and contains the working business logic. We keep it intact,
+    # but swap its Telegram transport module before executing it.
+    source = source.replace(
+        "import telebot\n    from telebot import apihelper",
+        "import aiogram_legacy as telebot\n    from aiogram_legacy import apihelper",
+        1,
+    )
+
     tree = ast.parse(source, filename=str(path))
 
-    # Remove only a top-level startup() call. The startup function itself
-    # stays intact, and this works even if bot.py has trailing comments/newlines.
-    removed = 0
+    # Disable only the old top-level startup() call. Webhook lifecycle belongs here.
     kept = []
+    removed = 0
     for node in tree.body:
         if (
             isinstance(node, ast.Expr)
@@ -89,43 +101,60 @@ def _load_legacy_bot():
     module.__file__ = str(path)
     sys.modules["bot"] = module
 
-    code = compile(tree, str(path), "exec")
-    exec(code, module.__dict__)
+    exec(compile(tree, str(path), "exec"), module.__dict__)
     return module
 
 
 def _get_legacy_bot():
-    global _legacy_bot
+    global _legacy_bot, _db_checked
+
     if _legacy_bot is None:
-        print("[startup] loading legacy bot.py", flush=True)
+        print("[startup] loading bot.py with aiogram transport", flush=True)
         _legacy_bot = _load_legacy_bot()
 
+    if not _db_checked:
         import pg_migrate
         pg_migrate.migrate_once()
-
-        print("[startup] legacy bot loaded; Neon migration checked", flush=True)
+        _db_checked = True
+        print("[startup] Neon migration checked", flush=True)
 
     return _legacy_bot
 
 
-def _legacy_update(raw: dict):
+async def _dispatch_update(raw: dict):
     legacy = _get_legacy_bot()
-    return legacy.telebot.types.Update.de_json(json.dumps(raw))
+    bot = Bot(BOT_TOKEN)
+
+    # The legacy synchronous facade sends all Telegram API calls through
+    # this exact aiogram Bot and this request's event loop.
+    legacy.bot.bind(bot, asyncio.get_running_loop())
+
+    try:
+        update = Update.model_validate(raw)
+        await _aiogram_dispatcher.feed_update(bot, update)
+    finally:
+        await bot.session.close()
 
 
-async def _process_legacy(raw: dict) -> None:
+@_router.message()
+async def _all_messages(message):
     legacy = _get_legacy_bot()
-    update = _legacy_update(raw)
-
-    print("[legacy] dispatching update to TeleBot", flush=True)
-    await asyncio.wait_for(
-        asyncio.to_thread(legacy.bot.process_new_updates, [update]),
-        timeout=LEGACY_TIMEOUT,
-    )
-    print("[legacy] TeleBot dispatch finished", flush=True)
+    await legacy.bot.dispatch_message(message)
 
 
-def _check_secret() -> None:
+@_router.callback_query()
+async def _all_callbacks(callback):
+    legacy = _get_legacy_bot()
+    await legacy.bot.dispatch_callback(callback)
+
+
+@_router.chat_member()
+async def _all_chat_members(update):
+    legacy = _get_legacy_bot()
+    await legacy.bot.dispatch_chat_member(update)
+
+
+def _check_secret():
     if request.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
         abort(403)
 
@@ -141,29 +170,18 @@ async def webhook():
 
     try:
         raw = request.get_json(force=True, silent=False)
-
         if not isinstance(raw, dict):
             return "Invalid update", 400
 
         update_id = raw.get("update_id", "unknown")
-        print(f"[webhook] received update_id={update_id}", flush=True)
+        print(f"[webhook] aiogram received update_id={update_id}", flush=True)
 
-        # IMPORTANT: don't feed the update through an empty aiogram
-        # dispatcher. bot.py is the real handler registry.
-        await _process_legacy(raw)
+        await _dispatch_update(raw)
 
-        print(f"[webhook] completed update_id={update_id}", flush=True)
+        print(f"[webhook] aiogram completed update_id={update_id}", flush=True)
         return "", 200
-
-    except asyncio.TimeoutError:
-        print("[webhook] legacy handler timed out", file=sys.stderr, flush=True)
-        return "Handler timeout", 504
 
     except Exception:
         print("[webhook] ERROR", file=sys.stderr, flush=True)
         traceback.print_exc(file=sys.stderr)
         return "Webhook processing failed", 500
-
-
-# Do NOT call setWebhook on every Vercel cold start. Telegram already has
-# the webhook URL; repeated SetWebhook calls trigger flood control.
