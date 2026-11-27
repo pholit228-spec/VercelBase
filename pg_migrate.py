@@ -87,13 +87,29 @@ def migrate_once():
             return
 
         db_path = Path(__file__).with_name("database.db")
+
+        # The live database is Neon PostgreSQL. The bundled SQLite database
+        # is only a bootstrap source and may be absent from a Vercel bundle.
+        # If Neon already has the bot schema, continue with schema migration
+        # instead of trying to open SQLite.
         if not db_path.exists():
+            has_users = pg.execute(
+                'SELECT 1 FROM information_schema.tables '
+                "WHERE table_schema='public' AND table_name='users'"
+            ).fetchone()
+
+            if has_users:
+                pg.execute(
+                    "INSERT INTO bot_migration_meta(key,value) "
+                    "VALUES('sqlite_bundle_v1','done') "
+                    "ON CONFLICT (key) DO NOTHING"
+                )
+                pg.commit()
+                migrate_bigint_ids(pg)
+                return
+
             raise RuntimeError("Bundled database.db is missing")
 
-        # Vercel's deployment filesystem is read-only. Open the bundled
-        # SQLite file explicitly as read-only so SQLite never tries to create
-        # a journal/WAL beside it. This is only the migration source; Neon
-        # remains the live database.
         original_connect = getattr(sqlite3, "_original_connect", None)
         if original_connect is None:
             original_connect = sqlite3.connect
@@ -145,7 +161,6 @@ def migrate_once():
                 "ON CONFLICT (key) DO NOTHING"
             )
             pg.commit()
-
             migrate_bigint_ids(pg)
         finally:
             src.close()
