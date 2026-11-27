@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 
 from aiogram import Bot as AiogramBot
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     BufferedInputFile,
     FSInputFile,
@@ -166,14 +167,32 @@ class TeleBot:
     def reply_to(self, message, text, *args, **kwargs):
         chat_id = message.chat.id
         reply_to = getattr(message, "message_id", None)
-        return self._run(
-            self._bot.send_message(
-                chat_id=chat_id,
-                text=text,
-                reply_to_message_id=reply_to,
-                **kwargs,
-            )
-        )
+
+        async def send():
+            try:
+                return await self._bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    reply_to_message_id=reply_to,
+                    **kwargs,
+                )
+            except TelegramBadRequest as exc:
+                # A reply target may no longer be available in a group.
+                # Retry as a normal message so one failed reply cannot abort
+                # the whole webhook and make the bot appear completely silent.
+                if "message to be replied not found" not in str(exc).lower():
+                    raise
+                print(
+                    "[telegram] reply target unavailable; retrying without reply",
+                    flush=True,
+                )
+                return await self._bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    **kwargs,
+                )
+
+        return self._run(send())
 
     def send_message(self, chat_id, text, **kwargs):
         return self._run(self._bot.send_message(chat_id=chat_id, text=text, **kwargs))
