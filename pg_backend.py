@@ -73,8 +73,11 @@ class CompatConnection:
         if m:
             table, cols, tail = m.groups()
             col_list = [c.strip().strip('"') for c in cols.split(",")]
-            s = f"INSERT INTO {table} ({cols}) {tail} ON CONFLICT DO UPDATE SET " + ", ".join(
-                f"{c}=EXCLUDED.{c}" for c in col_list
+            # SQLite INSERT OR REPLACE is closest to PostgreSQL UPSERT.
+            # Most bot tables use the first column(s) as their primary key.
+            conflict_col = col_list[0]
+            s = f"INSERT INTO {table} ({cols}) {tail} ON CONFLICT ({conflict_col}) DO UPDATE SET " + ", ".join(
+                f"{c}=EXCLUDED.{c}" for c in col_list if c != conflict_col
             )
             s = s.replace("?", "%s")
 
