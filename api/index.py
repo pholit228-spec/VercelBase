@@ -238,6 +238,12 @@ async def _all_messages(message):
         return
 
     legacy = _get_legacy_bot()
+
+    # Global trade system is handled before legacy commands.
+    from trade_system import handle_message as handle_trade_message
+    if await handle_trade_message(legacy, message):
+        return
+
     await legacy.bot.dispatch_message(message)
 
 
