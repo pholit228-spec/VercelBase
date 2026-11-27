@@ -14,6 +14,7 @@ if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.enviro
 
     sqlite3.connect = _connect
     # pg_backend already returns mapping-compatible rows; do not replace sqlite3.Row with object().
-    sqlite3.Row = type("CompatSQLiteRow", (), {"__init__": lambda self, *args, **kwargs: None})
+    from pg_backend import CompatRow
+    sqlite3.Row = CompatRow
     sqlite3.OperationalError = psycopg.OperationalError
     sqlite3.IntegrityError = psycopg.IntegrityError
