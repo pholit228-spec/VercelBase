@@ -121,6 +121,8 @@ def _get_legacy_bot():
         # file stays untouched. This registers custom foods through decorators.
         from glitch_food import install as install_glitch_food
         install_glitch_food(_legacy_bot)
+        from top_system import install as install_top_system
+        install_top_system(_legacy_bot)
 
     if not _db_checked:
         import pg_migrate
