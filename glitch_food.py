@@ -6,6 +6,11 @@ the large bot.py file.
 
 def install(bot_module):
     items = getattr(bot_module, "FOOD_ITEMS", None)
+    # Legacy bot did not include Glitch Slime in its English-name map, so
+    # favorite detection could never match even when the food declared it.
+    english_names = getattr(bot_module, "SLIME_ENGLISH_NAMES", None)
+    if isinstance(english_names, dict):
+        english_names["glitch_slime"] = "Glitch Slime"
     if not isinstance(items, list):
         return False
 
