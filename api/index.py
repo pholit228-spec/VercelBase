@@ -247,10 +247,16 @@ async def _all_messages(message):
     if await handle_ad_filter(message):
         return
 
+    legacy = _get_legacy_bot()
+
+    # Collect mature garden cycles before any command is handled. The legacy
+    # collector atomically advances each bed, so the same harvest cannot be
+    # granted twice by concurrent webhook requests.
+    from garden_harvest_notify import handle_message as handle_garden_harvest
+    await handle_garden_harvest(message, legacy)
+
     if await _handle_group_features(message):
         return
-
-    legacy = _get_legacy_bot()
 
     # Global trade system is handled before legacy commands.
     from trade_system import handle_message as handle_trade_message
