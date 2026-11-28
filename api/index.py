@@ -241,6 +241,12 @@ async def _handle_group_features(message):
 
 @_router.message()
 async def _all_messages(message):
+    # Global moderation runs before group commands and the legacy bot.
+    # It applies to everyone, including moderators/admins.
+    from ad_filter import handle_message as handle_ad_filter
+    if await handle_ad_filter(message):
+        return
+
     if await _handle_group_features(message):
         return
 
