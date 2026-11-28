@@ -117,6 +117,11 @@ def _get_legacy_bot():
         if isinstance(getattr(_legacy_bot, "SLIME_ENGLISH_NAMES", None), dict):
             _legacy_bot.SLIME_ENGLISH_NAMES["shimmer_slime"] = "Shimmer Slime"
 
+        # Standalone food extensions are loaded after bot.py so the huge legacy
+        # file stays untouched. This registers custom foods through decorators.
+        from glitch_food import install as install_glitch_food
+        install_glitch_food(_legacy_bot)
+
     if not _db_checked:
         import pg_migrate
         pg_migrate.migrate_once()
