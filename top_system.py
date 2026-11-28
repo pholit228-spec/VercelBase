@@ -43,7 +43,7 @@ def _format_duration(seconds):
         parts.append(f"{hours} ч")
     if minutes and len(parts) < 2:
         parts.append(f"{minutes} мин")
-    return " ".join(parts) or "< 1 мин"
+    return " ".join(parts) or "менее 1 мин"
 
 
 def _grant_weekly_style(conn, legacy, user_id):
